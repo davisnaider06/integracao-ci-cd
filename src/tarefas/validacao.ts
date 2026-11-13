@@ -14,7 +14,8 @@ function validarTitulo(titulo: unknown, erros: string[]): string | undefined {
     return undefined;
   }
   const limpo = titulo.trim();
-  if (limpo.length > TAMANHO_MAXIMO_TITULO) {
+  // DEFEITO PROPOSITAL (demonstração): deveria ser TAMANHO_MAXIMO_TITULO.
+  if (limpo.length > TAMANHO_MAXIMO_TITULO * 2) {
     erros.push(`titulo deve ter no máximo ${TAMANHO_MAXIMO_TITULO} caracteres.`);
     return undefined;
   }
