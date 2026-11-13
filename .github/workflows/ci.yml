@@ -1,0 +1,149 @@
+name: CI
+
+# Gatilho: todo Pull Request aberto ou atualizado contra a main.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Permissão mínima por padrão; o job de segurança amplia só o que precisa.
+permissions:
+  contents: read
+
+# Um commit novo no mesmo PR cancela a execução anterior.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 22
+
+jobs:
+  # ---------- Estágio 1: análises que não executam o código (em paralelo) ----------
+  formatacao:
+    name: 1. Análise de formatação (Prettier)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+
+  analise-estatica:
+    name: 2. Análise estática de código (ESLint + TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: ESLint
+        run: npm run lint
+      - name: Checagem de tipos
+        run: npm run typecheck
+
+  seguranca:
+    name: 3. Análise estática de segurança (CodeQL + npm audit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # necessário para enviar o resultado do CodeQL
+    steps:
+      - uses: actions/checkout@v6
+      - name: Iniciar CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+      - name: Analisar o código (SAST)
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:javascript-typescript
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Vulnerabilidades conhecidas nas dependências de produção
+        run: npm audit --omit=dev --audit-level=high
+
+  # ---------- Estágio 2: build ----------
+  build:
+    name: 4. Build
+    needs: [formatacao, analise-estatica, seguranca]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  # ---------- Estágio 3: testes ----------
+  teste-unitario:
+    name: 5. Testes unitários
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run test:unit
+
+  teste-integracao:
+    name: 6. Testes de integração (API + PostgreSQL)
+    needs: teste-unitario
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d app_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Banco descartável, criado e destruído a cada execução.
+      DATABASE_URL: postgres://ci:ci@localhost:5432/app_test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run test:integration
+
+  # ---------- Estágio 4: imagem ----------
+  imagem:
+    name: 7. Criação da imagem Docker
+    needs: teste-integracao
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - name: Construir a imagem (sem publicar)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ci-tarefas-api:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Conferir a imagem criada
+        run: docker image ls ci-tarefas-api
