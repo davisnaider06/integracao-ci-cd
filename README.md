@@ -62,3 +62,17 @@ sql/                     migrações
 tests/unit/              testes unitários
 tests/integration/       testes de integração
 ```
+
+## Pipeline de CI
+
+O workflow `.github/workflows/ci.yml` é disparado a cada Pull Request para a `main`:
+
+1. Análise de formatação (Prettier)
+2. Análise estática de código (ESLint + TypeScript)
+3. Análise estática de segurança (CodeQL + npm audit)
+4. Build
+5. Testes unitários
+6. Testes de integração (API + PostgreSQL)
+7. Criação da imagem Docker
+
+As etapas 1 a 3 rodam em paralelo. Cada etapa seguinte só roda se a anterior passou.
